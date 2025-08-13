@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  webapp:
+    # This builds from the Dockerfile in the main folder
+    build: .
+    ports:
+      - "8080:5000"
+
+  api:
+    # This builds from the Dockerfile in the './api' folder
+    build: ./api
+    # Notice: NO ports here. We don't need to access the api
+    # from our browser, only from our webapp.
