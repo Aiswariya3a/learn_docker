@@ -592,18 +592,24 @@ Now that we know the connection works, let's do a quick experiment to discover a
     def home():
         conn = get_db_connection()
         cur = conn.cursor()
+
+        # Create a table if it doesn't exist
         cur.execute("CREATE TABLE IF NOT EXISTS visits (id serial PRIMARY KEY, timestamp timestamp);")
+        # Insert the current time of the visit
         cur.execute("INSERT INTO visits (timestamp) VALUES (NOW());")
         conn.commit()
+
+        # Get all visits to display
         cur.execute("SELECT timestamp FROM visits ORDER BY timestamp DESC;")
         visits = cur.fetchall()
+
         cur.close()
         conn.close()
-        
+
         response = "<h1>Visitor Timestamps:</h1>"
         for visit in visits:
             response += f"<p>{visit[0]}</p>"
-        
+
         return response
 
     if __name__ == '__main__':
@@ -619,5 +625,161 @@ Now that we know the connection works, let's do a quick experiment to discover a
     ```bash
     docker-compose up -d
     ```
+-----
 
 Now for the important question: refresh your browser one last time. What do you see? What happened to the list of timestamps you created?
+
+Old data would have disappered!
+
+Containers are **ephemeral**, which means they are temporary. When you run `docker-compose down`, it doesn't just stop the containers; it removes them completely. Anything saved inside the container's internal filesystem gets deleted along with it.
+
+It's like writing your notes on a whiteboard. When you're done, you wipe the board clean (`docker-compose down`). The next time you start (`docker-compose up`), you get a fresh, blank board.
+
+-----
+
+## The Solution: Docker Volumes
+
+To save data permanently, we need to store it *outside* of the container in a special, managed location called a **Volume**.
+
+A volume is like a permanent filing cabinet that Docker manages. We can "attach" this filing cabinet to our database container. The database writes its data files into the cabinet instead of onto the temporary whiteboard.
+
+When we run `docker-compose down`, the container (the whiteboard) is wiped clean, but the filing cabinet and all its data remain untouched. The next time we start a new container, we just attach the same filing cabinet, and our database finds all its old data right where it left it.
+
+-----
+
+## How to Use a Volume
+
+We just need to make a small change to our `docker-compose.yml` file.
+
+1.  **Tell the `db` service to use a volume:** We connect a volume named `postgres-data` to the folder inside the container where PostgreSQL stores its data (`/var/lib/postgresql/data`).
+
+where,
+
+-- `postgres-data` is the **name of the Docker Volume** we created. This is our permanent "filing cabinet" that lives on your computer but is managed by Docker. It exists completely outside of any container.
+
+We declared this at the very bottom of the `docker-compose.yml` file.
+
+-- `/var/lib/postgresql/data` - This is a specific folder path **inside the PostgreSQL container**.
+
+This is not a random path we invented. The creators of the official PostgreSQL Docker image have designed it so that the database stores all of its critical data files in this *exact* folder. Think of it as the designated storage room inside the container.
+
+
+2.  **Declare the volume at the bottom:** We officially tell Docker to create and manage a volume named `postgres-data`.
+
+Here is the updated `docker-compose.yml`:
+
+```yaml
+services:
+  webapp:
+    build: .
+    ports:
+      - "8080:5000"
+    depends_on:
+      - db
+
+  db:
+    image: "postgres:13-alpine"
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydatabase
+    # Mount the named volume to the container's data directory
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+# Declare the volume that Docker will manage
+volumes:
+  postgres-data:
+```
+
+After you've updated your file with these changes, try the experiment one more time: `up`, refresh, `down`, and `up` again.
+
+What do you expect to happen to your list of timestamps this time?
+
+It stays!!
+
+Now, whenever the PostgreSQL database tries to save a file, it thinks it's saving it to its internal folder, but the portal secretly redirects that file into our permanent volume. This is how the data survives even after the container is deleted.
+
+-----
+
+Right now, our `docker-compose.yml` file has our database password written in plain text. This is a security risk. If you were to share this file or commit it to a public Git repository, your password would be exposed.
+
+The standard way to handle this is with an **environment file**, usually named `.env`. This file lives on your local machine, you **never** share it, and it holds all of your secret values.
+
+Let's do this in three steps:
+1.  First, we'll create a `.env` file to store our password.
+2.  Then, we'll update our `docker-compose.yml` to read the password from this new file.
+3.  Finally, we'll add `.env` to our `.gitignore` file to make sure we never accidentally share it.
+
+-----
+
+### Step 1: Create the `.env` File
+
+In the same main directory as your `docker-compose.yml` file, create a new file named `.env`.
+
+This file will hold our password in a simple `KEY=VALUE` format. Add the following line to it:
+
+```
+# file: .env
+POSTGRES_PASSWORD=my_super_secret_password
+```
+
+-----
+
+### Step 2: Update `docker-compose.yml`
+
+Now, let's tell Docker Compose to use the variable from our new file instead of the hardcoded password. It will automatically load the `.env` file and understand what `${POSTGRES_PASSWORD}` means.
+
+```yaml
+services:
+  webapp:
+    build: .
+    ports:
+      - "8080:5000"
+    depends_on:
+      - db
+
+  db:
+    image: "postgres:13-alpine"
+    environment:
+      - POSTGRES_USER=myuser
+      # This now reads the password from your .env file
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=mydatabase
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:
+```
+
+-----
+
+### Step 3: Update `.gitignore`
+
+This is a crucial final step. It tells Git to ignore the `.env` file, so you can never accidentally upload your secrets to a place like GitHub.
+
+Add this line to your `.gitignore` file:
+
+```gitignore
+# Ignore environment file with secrets
+.env
+```
+
+And that's it\! You've now separated your configuration from your secrets. You can run `docker-compose up -d` and everything will work as before, but your password is now secure.
+
+-----
+
+You've successfully secured your application and learned one of the most important best practices for working with Docker.
+
+### Look How Far You've Come
+You've gone from the very basics to building a secure, multi-container application. You now understand how to:
+* Package an app with a **`Dockerfile`**.
+* Define and run services with **`docker-compose.yml`**.
+* Connect multiple containers on a private **network**.
+* Save permanent data with **Volumes**.
+* Manage secrets with **`.env` files**.
+
+This is a very solid foundation in Docker, and you have all the key pieces to start building and containerizing your own projects.
+
+-----
