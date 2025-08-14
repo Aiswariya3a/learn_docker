@@ -3,7 +3,7 @@
 
 At its core, Docker is a tool that solves a classic problem for developers: "But it works on my machine!" 
 
-It does this by packaging an application and all its dependencies (like libraries, settings, and files) into a single, standardized unit called a **container**. This container is like a real-world shipping container—it can run consistently on any computer that has Docker, no matter the underlying operating system or configuration.
+It does this by packaging an application and all its dependencies (like libraries, settings, and files) into a single, standardized unit called a **container**. This container is like a real-world shipping container, it can run consistently on any computer that has Docker, no matter the underlying operating system or configuration.
 
 Let's look at the two most important building blocks of Docker: **Images** and **Containers**.
 
@@ -20,7 +20,7 @@ A Docker Image is a read-only, unchangeable template. It's like a detailed bluep
 - System libraries and tools.
 - Specific settings and configurations.
 
-You build an image once, and you can use it to create many running instances. Just like a blueprint, the image itself is static—it's just the set of instructions.
+You build an image once, and you can use it to create many running instances. Just like a blueprint, the image itself is static, it's just the set of instructions.
 
 **Docker Containers: The House**
 
@@ -285,8 +285,6 @@ Let's use Docker Compose for **only our single web app container**.
     This file describes the *exact same things* our `docker run` command did.
 
     ```yaml
-    # We'll use version 3.8 of Docker Compose
-    version: '3.8'
 
     # 'services' is the list of containers we want to run
     services:
@@ -395,7 +393,6 @@ First, let's create the files for our second, simpler web service.
 Now, let's tell Docker Compose about both services.
 
 ```yaml
-version: '3.8'
 services:
   webapp:
     # This builds from the Dockerfile in the main folder
@@ -460,3 +457,167 @@ docker-compose up -d --build
 (The `--build` flag tells Compose to rebuild the images since we changed the code.)
 
 Go to `http://localhost:8080`. Your `webapp` will now call the `api` container, get the message, and display it. You have two containers talking to each other\!
+
+-----
+
+## Connecting a DataBase
+
+Let's connect our PostgreSQL database.
+
+The process has three main steps:
+
+1.  We'll add the new `db` service to our `docker-compose.yml` file.
+2.  We'll update our `webapp`'s Python code to talk to this new database.
+3.  We'll run it and see it in action.
+
+-----
+
+### Step 1: Update `docker-compose.yml`
+
+Let's replace our `api` service with a new service named `db` for our database.
+
+```yaml
+version: '3.8'
+services:
+  webapp:
+    build: .
+    ports:
+      - "8080:5000"
+    # This tells Compose to start the db before the webapp
+    depends_on:
+      - db
+
+  db:
+    # Use the official PostgreSQL image
+    image: "postgres:13-alpine"
+    # These are settings passed to the PostgreSQL container on startup
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydatabase
+```
+
+The **`environment`** section is how we configure the database, setting the default user, password, and database name.
+
+-----
+
+### Step 2: Update the Web App
+
+Now we'll change the Python code to connect to PostgreSQL.
+
+1.  First, update your main `requirements.txt` file. We need to add the PostgreSQL driver, `psycopg2-binary`, and we can remove `requests`.
+
+    ```
+    Flask
+    psycopg2-binary
+    ```
+2.  Next, replace the code in your `main.py` file with this:
+
+    ```python
+    from flask import Flask
+    import psycopg2
+    import time
+
+    app = Flask(__name__)
+
+    @app.route('/')
+    def home():
+        # Let's try to connect to the database
+        try:
+            conn = psycopg2.connect(
+                host="db",
+                database="mydatabase",
+                user="myuser",
+                password="mypassword"
+            )
+            # If we get here, the connection was successful!
+            conn.close() # Close the connection right away
+            return "<h1>Success! I connected to the database.</h1>"
+
+        except psycopg2.OperationalError as e:
+            # If we get here, something went wrong
+            return f"<h1>Error: Could not connect. Is the database running?</h1><p>{e}</p>"
+
+    if __name__ == '__main__':
+        app.run(host='0.0.0.0', port=5000)
+    ```
+
+-----
+
+### Step 3: Run It
+
+Now, run the command to build the new `webapp` image and start both services:
+
+```bash
+docker-compose up --build -d
+```
+
+Go to `http://localhost:8080` in your browser. You will see, "Success! I connected to the database."
+
+***
+
+## how Docker containers handle data?
+
+It proves your `webapp` container can successfully find and communicate with your `db` container over the private network Docker Compose created.
+
+Now that we know the connection works, let's do a quick experiment to discover a very important concept about how Docker containers handle data.
+
+-----
+
+### The Experiment: What Happens When Containers Stop?
+
+1.  First, let's put the slightly bigger code back into your `main.py` file. This is the version that creates a table and saves a timestamp for each visit.
+
+    ```python
+    import time
+    from flask import Flask
+    import psycopg2
+
+    app = Flask(__name__)
+
+    def get_db_connection():
+        while True:
+            try:
+                conn = psycopg2.connect(
+                    host="db",
+                    database="mydatabase",
+                    user="myuser",
+                    password="mypassword")
+                return conn
+            except psycopg2.OperationalError:
+                print("Connection failed, retrying...")
+                time.sleep(1)
+
+    @app.route('/')
+    def home():
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS visits (id serial PRIMARY KEY, timestamp timestamp);")
+        cur.execute("INSERT INTO visits (timestamp) VALUES (NOW());")
+        conn.commit()
+        cur.execute("SELECT timestamp FROM visits ORDER BY timestamp DESC;")
+        visits = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        response = "<h1>Visitor Timestamps:</h1>"
+        for visit in visits:
+            response += f"<p>{visit[0]}</p>"
+        
+        return response
+
+    if __name__ == '__main__':
+        app.run(host='0.0.0.0', port=5000)
+    ```
+2.  Now, in your terminal, run `docker-compose up --build -d` to update your running application.
+3.  Go to `http://localhost:8080` and refresh the page 3-4 times. You should see a new timestamp appear with each refresh.
+4.  Once you have a few timestamps, go back to your terminal and completely stop and **remove** the containers with this command:
+    ```bash
+    docker-compose down
+    ```
+5.  Finally, start everything again:
+    ```bash
+    docker-compose up -d
+    ```
+
+Now for the important question: refresh your browser one last time. What do you see? What happened to the list of timestamps you created?

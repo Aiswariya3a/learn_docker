@@ -1,13 +1,17 @@
-version: '3.8'
 services:
   webapp:
-    # This builds from the Dockerfile in the main folder
     build: .
     ports:
       - "8080:5000"
+    # This tells Compose to start the db before the webapp
+    depends_on:
+      - db
 
-  api:
-    # This builds from the Dockerfile in the './api' folder
-    build: ./api
-    # Notice: NO ports here. We don't need to access the api
-    # from our browser, only from our webapp.
+  db:
+    # Use the official PostgreSQL image
+    image: "postgres:13-alpine"
+    # These are settings passed to the PostgreSQL container on startup
+    environment:
+      - POSTGRES_USER=myuser
+      - POSTGRES_PASSWORD=mypassword
+      - POSTGRES_DB=mydatabase
